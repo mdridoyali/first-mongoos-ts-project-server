@@ -2,13 +2,18 @@ import { Schema, model } from 'mongoose';
 
 
 import {
-  Guardian,
-  LocalGuardian,
-  Student,
-  UserName,
+  TGuardian,
+  TLocalGuardian,
+  TStudent,
+  StudentMethods,
+  TUserName,
+  StudentModel,
 } from './student.interface';
+import { boolean } from 'joi';
+import bcrypt from 'bcrypt'
+import config from '../../config';
 
-const UserNameSchema = new Schema<UserName>({
+const UserNameSchema = new Schema<TUserName>({
   firstName: {
     type: String,
     required: [true, 'First name is required'],
@@ -23,7 +28,7 @@ const UserNameSchema = new Schema<UserName>({
   }
 });
 
-const guardianSchema = new Schema<Guardian>({
+const guardianSchema = new Schema<TGuardian>({
   fatherName: { type: String, required: [true, 'Father name is required'] },
   fatherOccupation: { type: String, required: [true, 'Father occupation is required'] },
   fatherContactNo: { type: String, required: [true, 'Father contact number is required'] },
@@ -32,7 +37,7 @@ const guardianSchema = new Schema<Guardian>({
   motherContactNo: { type: String, required: [true, 'Mother contact number is required'] },
 });
 
-const localGuardianSchema = new Schema<LocalGuardian>({
+const localGuardianSchema = new Schema<TLocalGuardian>({
   name: { type: String, required: [true, 'Local guardian name is required'] },
   occupation: { type: String, required: [true, 'Local guardian occupation is required'] },
   contactNo: { type: String, required: [true, 'Local guardian contact number is required'] },
@@ -45,11 +50,16 @@ const localGuardianSchema = new Schema<LocalGuardian>({
 
 
 
-const studentSchema = new Schema<Student>({
+const studentSchema = new Schema<TStudent, StudentModel>({
   id: {
     type: String,
     required: [true, 'Student ID is required'],
     unique: true
+  },
+  password: {
+    type: String,
+    required: [true, 'Password is required'],
+    maxlength: [20, 'Password can not be more then 20 characters']
   },
   name: {
     type: UserNameSchema,
@@ -88,9 +98,71 @@ const studentSchema = new Schema<Student>({
   profileImg: { type: String },
   isActive: {
     type: String,
-    enum: ['active', 'blocked'],
+    enum: {
+      values: ['active', 'blocked'],
+      message: '{VALUE} is not a valid status'
+    },
     default: "active"
   },
+  isDeleted: {
+    type: Boolean,
+    default: false
+  }
+}, {
+  toJSON: {
+    virtuals: true
+  }
 });
 
-export const StudentModel = model<Student>('Student', studentSchema);
+// virtual
+studentSchema.virtual('fullName').get(function () {
+  return this.name.firstName + " " + this.name.middleName + " " + this.name.lastName
+})
+
+
+
+//pre save middleware / hook : will work on create() save()
+studentSchema.pre('save', async function (next) {
+  // console.log(this, 'pre hook : we will save data');
+  // hashing password and save into DB
+  const user = this;
+  user.password = await bcrypt.hash(user.password, Number(config.bcrypt_salt_rounds))
+  next()
+})
+
+//post save middleware / hook
+studentSchema.post('save', function (doc, next) {
+  doc.password = '',
+    next()
+})
+
+// Query middleware
+studentSchema.pre('find', function (next) {
+  this.find({ isDeleted: { $ne: true } })
+  next()
+})
+studentSchema.pre('findOne', function (next) {
+  this.find({ isDeleted: { $ne: true } })
+  next()
+})
+studentSchema.pre('aggregate', function (next) {
+  this.pipeline().unshift({ $match: { isDeleted: { $ne: true } } })
+  next()
+})
+
+
+
+// creating a custom static method
+studentSchema.statics.isUserExists = async function (id: String) {
+  const existingUser = await Student.findOne({ id })
+  return existingUser
+}
+
+
+// creating a custom instance method
+// studentSchema.methods.isUserExists = async function (id: string) {
+//   const existingUser = await Student.findOne({ id })
+//   return existingUser
+// }
+
+export const Student = model<TStudent, StudentModel>('Student', studentSchema);
